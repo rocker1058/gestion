@@ -74,7 +74,10 @@ db.exec(`
   );
 `);
 
-// Usuarios iniciales
+// Migración: columnas para correo de recuperación (seguro si ya existen).
+try { db.exec("ALTER TABLE cuentas ADD COLUMN correoRecup TEXT"); } catch (e) {}
+try { db.exec("ALTER TABLE cuentas ADD COLUMN passRecup TEXT"); } catch (e) {}
+
 const uCount = db.prepare('SELECT COUNT(*) c FROM users').get();
 if (uCount.c === 0) {
   const seed = [
@@ -228,7 +231,7 @@ app.delete('/api/otros/:id', requireAuth, requireRole('admin'), (req, res) => {
 });
 
 // ===== Cuentas (con cifrado de campos sensibles) =====
-const SECRET_FIELDS = ['password', 'passCorreo', 'fa2'];
+const SECRET_FIELDS = ['password', 'passCorreo', 'fa2', 'passRecup'];
 function outCuenta(r, canSeeSecrets) {
   const o = { ...r };
   SECRET_FIELDS.forEach(f => o[f] = canSeeSecrets ? decrypt(r[f]) : '');
@@ -248,21 +251,49 @@ app.post('/api/cuentas', requireAuth, requireRole('admin', 'editor'), (req, res)
 });
 app.post('/api/cuentas/bulk', requireAuth, requireRole('admin', 'editor'), (req, res) => {
   const list = req.body.cuentas || [];
-  let nuevas = 0, dup = 0;
-  const ins = db.prepare(`INSERT INTO cuentas (nombre,plataforma,url,correo,password,passCorreo,fa2,notas)
-    VALUES (?,?,?,?,?,?,?,?)`);
-  const exists = db.prepare('SELECT 1 FROM cuentas WHERE lower(nombre)=lower(?) AND plataforma=?');
+  let nuevas = 0, dup = 0, actualizadas = 0;
+  const ins = db.prepare(`INSERT INTO cuentas (nombre,plataforma,url,correo,password,passCorreo,fa2,notas,correoRecup,passRecup)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`);
+  const getExist = db.prepare('SELECT * FROM cuentas WHERE lower(nombre)=lower(?) AND plataforma=?');
+  const upd = db.prepare(`UPDATE cuentas SET url=?, correo=?, password=?, passCorreo=?, fa2=?, notas=?, correoRecup=?, passRecup=? WHERE id=?`);
   const tx = db.transaction(() => {
     for (const c of list) {
       if (!c.nombre) continue;
-      if (exists.get(c.nombre, c.plataforma)) { dup++; continue; }
+      const ex = getExist.get(c.nombre, c.plataforma);
+      if (ex) {
+        // La cuenta ya existe: actualizamos solo los campos que vengan con dato
+        // en el archivo (así se corrigen las contraseñas mal cargadas) y preservamos
+        // lo que ya había (p.ej. notas) cuando el archivo no lo trae.
+        const val = v => (v == null ? '' : String(v).trim());
+        const nv = {
+          url:        val(c.url)        || ex.url || '',
+          correo:     val(c.correo)     || ex.correo || '',
+          notas:      val(c.notas)      || ex.notas || '',
+          correoRecup:val(c.correoRecup)|| ex.correoRecup || '',
+          // Campos cifrados: si viene valor nuevo lo re-ciframos; si no, conservamos el cifrado anterior.
+          password:   val(c.password)   ? encrypt(c.password)   : ex.password,
+          passCorreo: val(c.passCorreo) ? encrypt(c.passCorreo) : ex.passCorreo,
+          fa2:        val(c.fa2)         ? encrypt(c.fa2)         : ex.fa2,
+          passRecup:  val(c.passRecup)   ? encrypt(c.passRecup)   : ex.passRecup
+        };
+        // ¿cambió algo realmente?
+        const cambio = nv.url!==ex.url || nv.correo!==ex.correo || nv.notas!==(ex.notas||'') ||
+          nv.correoRecup!==(ex.correoRecup||'') || nv.password!==ex.password ||
+          nv.passCorreo!==ex.passCorreo || nv.fa2!==ex.fa2 || nv.passRecup!==(ex.passRecup||'');
+        if (cambio) {
+          upd.run(nv.url, nv.correo, nv.password, nv.passCorreo, nv.fa2, nv.notas, nv.correoRecup, nv.passRecup, ex.id);
+          actualizadas++;
+        } else { dup++; }
+        continue;
+      }
       ins.run(c.nombre, c.plataforma, c.url || '', c.correo || '',
-        encrypt(c.password), encrypt(c.passCorreo), encrypt(c.fa2), c.notas || '');
+        encrypt(c.password), encrypt(c.passCorreo), encrypt(c.fa2), c.notas || '',
+        c.correoRecup || '', encrypt(c.passRecup));
       nuevas++;
     }
   });
   tx();
-  res.json({ nuevas, dup });
+  res.json({ nuevas, dup, actualizadas });
 });
 app.put('/api/cuentas/:id', requireAuth, requireRole('admin', 'editor'), (req, res) => {
   const c = req.body;

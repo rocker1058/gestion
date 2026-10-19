@@ -355,6 +355,8 @@ function openCuenta(id){
   if(canSecret){
     html+=row('Contraseña',c.password,true);
     html+=row('Contraseña correo',c.passCorreo,true);
+    html+=row('Correo de recuperación',c.correoRecup,false);
+    html+=row('Contraseña correo recup.',c.passRecup,true);
     html+=row('Código 2FA',c.fa2,true);
   } else {
     html+=`<div class="cred-row"><span class="cred-lbl">Contraseñas</span><span class="cred-val" style="color:var(--mut)">ocultas para tu rol</span></div>`;
@@ -477,13 +479,60 @@ function procesarBloques(rows){
     if(t.startsWith('cuentas youtube'))return'YouTube';
     return null;};
   const esHeader=c=>{const t=(c||'').toLowerCase().trim();return t.startsWith('nombre de usuario')||t.startsWith('correo');};
+  // Detección automática por columnas cuando el CSV NO trae fila de bloque ("cuentas instagram", etc.)
+  // Reconoce encabezados tipo: correo, contraseña, correo respaldo, contraseña correo, usuario ig, contraseña ig, url ig
+  let colMap=null;
+  const detectCols=r=>{
+    const cols=r.map(c=>(c||'').toLowerCase().trim());
+    const idx=keys=>cols.findIndex(c=>keys.some(k=>c.includes(k)));
+    let plat=null;
+    if(cols.some(c=>c.includes('usuario ig')||c.includes('url ig')||c.includes('contraseña ig')||c.includes('instagram')))plat='Instagram';
+    else if(cols.some(c=>c.includes('usuario tiktok')||c.includes('url tiktok')||c.includes('tiktok')))plat='TikTok';
+    else if(cols.some(c=>c.includes('usuario yt')||c.includes('url yt')||c.includes('youtube')))plat='YouTube';
+    else if(cols.some(c=>c.includes('url fb')||c.includes('facebook')))plat='Facebook';
+    if(!plat)return null;
+    // Correo principal: primera columna "correo" que NO sea de respaldo/recuperación.
+    let correo=-1; for(let i=0;i<cols.length;i++){ if(cols[i].includes('correo')&&!cols[i].includes('respaldo')&&!cols[i].includes('recup')){correo=i;break;} }
+    // Correo de recuperación / respaldo.
+    const correoRecup=idx(['correo de respaldo','correo de recup','respaldo del correo','correo respaldo']);
+    // La contraseña del correo PRINCIPAL es la primera columna "contraseña" que aparece
+    // DESPUÉS del correo principal. Nos basamos en la POSICIÓN y no en el nombre, porque
+    // los encabezados vienen con textos inconsistentes ("contraseña de correo contraseña", etc.).
+    let passCorreo=-1; if(correo>=0){ for(let i=correo+1;i<cols.length;i++){ if(cols[i].includes('contraseña')){passCorreo=i;break;} } }
+    // La contraseña del correo de recuperación es la primera "contraseña" tras el correo de respaldo.
+    let passRecup=-1; if(correoRecup>=0){ for(let i=correoRecup+1;i<cols.length;i++){ if(cols[i].includes('contraseña')){passRecup=i;break;} } }
+    return {plataforma:plat,
+      correo:correo,
+      correoRecup:correoRecup,
+      passCorreo:passCorreo,
+      passRecup:passRecup,
+      usuario:idx(['usuario ig','usuario tiktok','usuario yt','usuario']),
+      passPlat:idx(['contraseña ig','contraseña tiktok','contraseña yt']),
+      url:idx(['url ig','url tiktok','url yt','url fb','url'])};
+  };
   for(const r of rows){
     const c0=(r[0]||'').trim(); const ns=detect(c0);
-    if(ns){seccion=ns;continue;} if(!seccion)continue; if(esHeader(c0))continue; if(!c0)continue;
+    if(ns){seccion=ns;colMap=null;continue;}
+    // Si aún no hay sección por bloque, intenta detectar encabezado por columnas
+    if(!seccion){ const m=detectCols(r); if(m){seccion='__cols__';colMap=m;continue;} }
+    if(!seccion)continue;
+    if(seccion==='__cols__'){
+      const m=colMap;
+      const correo=m.correo>=0?(r[m.correo]||'').trim():'';
+      const usuario=m.usuario>=0?(r[m.usuario]||'').trim():'';
+      if(!correo&&!usuario)continue;
+      out.push({nombre:usuario||correo.split('@')[0],plataforma:m.plataforma,
+        correo:correo,passCorreo:m.passCorreo>=0?(r[m.passCorreo]||''):'',
+        correoRecup:m.correoRecup>=0?(r[m.correoRecup]||'').trim():'',
+        passRecup:m.passRecup>=0?(r[m.passRecup]||''):'',
+        password:m.passPlat>=0?(r[m.passPlat]||''):'',url:m.url>=0?(r[m.url]||''):'',fa2:'',notas:''});
+      continue;
+    }
+    if(esHeader(c0))continue; if(!c0)continue;
     let c=null;
     if(seccion==='X (Twitter)') c={nombre:c0,plataforma:'X (Twitter)',password:r[1]||'',fa2:r[2]||'',url:r[3]||'',correo:r[4]||'',passCorreo:r[5]||'',notas:''};
-    else if(seccion==='Instagram') c={nombre:(r[2]||c0),plataforma:'Instagram',correo:c0,passCorreo:r[1]||'',password:r[3]||'',url:r[4]||'',fa2:'',notas:(r[5]?'correo respaldo: '+r[5]:'')};
-    else if(seccion==='TikTok') c={nombre:(r[2]||c0),plataforma:'TikTok',correo:c0,passCorreo:r[1]||'',password:r[3]||'',url:r[4]||'',fa2:'',notas:''};
+    else if(seccion==='Instagram') c={nombre:(r[2]||c0),plataforma:'Instagram',correo:c0,passCorreo:r[1]||'',password:r[3]||'',url:r[4]||'',fa2:'',correoRecup:(r[5]||'').trim(),passRecup:r[6]||'',notas:''};
+    else if(seccion==='TikTok') c={nombre:(r[2]||c0),plataforma:'TikTok',correo:c0,passCorreo:r[1]||'',password:r[3]||'',url:r[4]||'',fa2:'',correoRecup:(r[5]||'').trim(),passRecup:r[6]||'',notas:''};
     else if(seccion==='Facebook') c={nombre:(r[0]||'').split('@')[0],plataforma:'Facebook',correo:c0,password:r[1]||'',passCorreo:r[1]||'',url:r[2]||'',fa2:'',notas:''};
     else if(seccion==='YouTube') c={nombre:(r[2]||c0),plataforma:'YouTube',correo:c0,passCorreo:r[1]||'',password:r[3]||'',url:r[4]||'',fa2:'',notas:''};
     if(c&&c.nombre) out.push(c);
@@ -493,7 +542,8 @@ function procesarBloques(rows){
 async function enviarCuentas(list,msgEl){
   if(list.length===0){ msgEl.style.color='var(--red)'; msgEl.textContent='No se detectaron cuentas'; return; }
   const res=await api('/api/cuentas/bulk',{method:'POST',body:JSON.stringify({cuentas:list})});
-  msgEl.style.color='var(--green)'; msgEl.textContent=`✓ Importadas ${res.nuevas} (${res.dup} ya existían)`;
+  const act=res.actualizadas||0;
+  msgEl.style.color='var(--green)'; msgEl.textContent=`✓ ${res.nuevas} nuevas · ${act} actualizadas · ${res.dup} sin cambios`;
   await loadCuentas();
 }
 function importCSV(ev){
