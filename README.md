@@ -1,45 +1,39 @@
-# Gestión y Pautas
+# Pautas y Gestión
 
-Aplicación web para gestión de pautas publicitarias y cuentas de redes sociales, con control de acceso por roles.
+Aplicación web para gestión de pautas publicitarias y cuentas de redes sociales
+(X/Twitter, Instagram, TikTok, Facebook, YouTube).
 
-## Características
-
-- **Autenticación** con sesiones (cookies httpOnly) y contraseñas con bcrypt.
-- **Roles de usuario:**
-  - `admin`: acceso total (pautas, otros, cuentas, usuarios).
-  - `editor`: solo cuentas; puede ver, crear, importar y editar cuentas.
-  - `viewer`: solo lectura de pautas y otros.
-- **Cuentas** con cifrado AES-256-GCM de campos sensibles (contraseñas, 2FA).
-- **Importación** de cuentas desde CSV o pegado desde Excel.
-
-## Requisitos
-
-- Node.js 18+
-
-## Instalación
-
-```bash
-npm install
-npm start
-```
-
-El servidor corre por defecto en el puerto `3001` (configurable con la variable `PORT`).
-
-## Primer arranque
-
-Al iniciar por primera vez se crea la base de datos en `data/pautas.db` y se generan usuarios iniciales. Cambia estas contraseñas en producción.
-
-## Notas de seguridad
-
-- `data/` (base de datos y `secret.key`) **no se versiona**. La clave de cifrado se genera automáticamente en el primer arranque y debe conservarse: sin ella no se pueden descifrar las credenciales guardadas.
-- Despliega detrás de un proxy con HTTPS (p. ej. nginx).
+## Stack
+- Backend: Node.js + Express
+- Base de datos: SQLite (`better-sqlite3`)
+- Autenticación: usuarios con roles (viewer / editor / admin), contraseñas con `bcryptjs`
+- Frontend: HTML + JS estático servido desde `public/`
 
 ## Estructura
-
 ```
-server.js        # Backend Express + SQLite
+server.js        # Servidor Express + API REST
 public/
-  index.html     # Interfaz
-  app.js         # Lógica del cliente
+  index.html     # UI
+  app.js         # Lógica del frontend
 package.json
 ```
+
+## Desarrollo local
+```bash
+npm install
+npm start        # arranca en http://localhost:3001
+```
+
+## Importación de cuentas (CSV)
+La app detecta cuentas desde CSV de dos formas:
+1. Por bloques: filas tipo `cuentas instagram`, `cuentas x`, etc.
+2. Por encabezado de columnas (detección automática): reconoce columnas
+   como `usuario ig`, `url ig`, `contraseña ig`, etc. aunque el CSV no traiga
+   la fila de bloque.
+
+La importación **agrega** cuentas nuevas y no sobrescribe las existentes
+(compara por nombre + plataforma).
+
+## Datos sensibles
+La carpeta `data/` (base de datos y clave de cifrado) **no se versiona**.
+Se genera automáticamente al arrancar el servidor.
